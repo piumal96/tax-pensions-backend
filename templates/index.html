@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retirement Planner - Advanced Simulation</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎯 Advanced Retirement Planner</h1>
+            <p>Comprehensive tax-optimized retirement withdrawal strategy simulator</p>
+        </header>
+
+        <!-- Tabs Navigation -->
+        <div class="tabs-container">
+            <button class="tab-button active" data-tab="upload">📁 CSV Upload</button>
+            <button class="tab-button" data-tab="form">📋 Fill Form</button>
+        </div>
+
+        <!-- Tab 1: CSV Upload -->
+        <div id="upload" class="tab-content active">
+            <div class="card">
+                <h2>Upload Configuration File</h2>
+                <p class="description">Upload a CSV file with your retirement planning parameters.</p>
+                
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📤</div>
+                    <p>Drag and drop your CSV file here</p>
+                    <p class="small-text">or</p>
+                    <input type="file" id="csvFile" accept=".csv" />
+                    <label for="csvFile" class="file-input-label">Click to browse</label>
+                </div>
+                
+                <div id="fileInfo" class="file-info" style="display: none;">
+                    <p>File: <strong id="fileName"></strong></p>
+                </div>
+                
+                <div class="form-group">
+                    <a href="{{ url_for('download_template') }}" class="btn btn-secondary">📥 Download Sample Template</a>
+                </div>
+                
+                <button class="btn btn-primary" id="runSimulationUpload">Run Simulation</button>
+            </div>
+        </div>
+
+        <!-- Tab 2: Form Input -->
+        <div id="form" class="tab-content">
+            <div class="card">
+                <h2>Enter Retirement Parameters</h2>
+                <form id="parametersForm" class="parameters-form">
+                    
+                    <!-- Demographics Section -->
+                    <fieldset>
+                        <legend>Demographics</legend>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="p1_start_age">Husband Current Age *</label>
+                                <input type="number" id="p1_start_age" name="p1_start_age" value="65" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="p2_start_age">Wife Current Age *</label>
+                                <input type="number" id="p2_start_age" name="p2_start_age" value="63" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="end_simulation_age">End Simulation Age *</label>
+                                <input type="number" id="end_simulation_age" name="end_simulation_age" value="95" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="inflation_rate">Inflation Rate (annual) *</label>
+                                <input type="number" id="inflation_rate" name="inflation_rate" value="0.03" step="0.001" required>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- Spending & Goals Section -->
+                    <fieldset>
+                        <legend>Annual Spending & Goals</legend>
+                        <div class="form-group">
+                            <label for="annual_spend_goal">Annual Spend Goal (today's dollars) *</label>
+                            <input type="number" id="annual_spend_goal" name="annual_spend_goal" value="200000" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="target_tax_bracket_rate">Target Tax Bracket Rate *</label>
+                            <select id="target_tax_bracket_rate" name="target_tax_bracket_rate" required>
+                                <option value="0.22">22% Bracket</option>
+                                <option value="0.24" selected>24% Bracket</option>
+                                <option value="0.32">32% Bracket</option>
+                            </select>
+                        </div>
+                    </fieldset>
+
+                    <!-- Employment Income Section -->
+                    <fieldset>
+                        <legend>Employment Income</legend>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="p1_employment_income">P1 Annual Employment Income (today's dollars) *</label>
+                                <input type="number" id="p1_employment_income" name="p1_employment_income" value="100000" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="p1_employment_until_age">P1 Works Until Age *</label>
+                                <input type="number" id="p1_employment_until_age" name="p1_employment_until_age" value="67" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="p2_employment_income">P2 Annual Employment Income (today's dollars) *</label>
+                                <input type="number" id="p2_employment_income" name="p2_employment_income" value="80000" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="p2_employment_until_age">P2 Works Until Age *</label>
+                                <input type="number" id="p2_employment_until_age" name="p2_employment_until_age" value="65" required>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- Social Security Section -->
+                    <fieldset>
+                        <legend>Social Security</legend>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="p1_ss_amount">Husband SS Amount (annual, today's dollars) *</label>
+                                <input type="number" id="p1_ss_amount" name="p1_ss_amount" value="45000" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="p1_ss_start_age">Husband SS Start Age *</label>
+                                <input type="number" id="p1_ss_start_age" name="p1_ss_start_age" value="70" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="p2_ss_amount">Wife SS Amount (annual, today's dollars) *</label>
+                                <input type="number" id="p2_ss_amount" name="p2_ss_amount" value="45000" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="p2_ss_start_age">Wife SS Start Age *</label>
+                                <input type="number" id="p2_ss_start_age" name="p2_ss_start_age" value="65" required>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- Pension Section -->
+                    <fieldset>
+                        <legend>Pensions (if any)</legend>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="p1_pension">Husband Annual Pension (today's dollars) *</label>
+                                <input type="number" id="p1_pension" name="p1_pension" value="0" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="p1_pension_start_age">Husband Pension Start Age *</label>
+                                <input type="number" id="p1_pension_start_age" name="p1_pension_start_age" value="65" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="p2_pension">Wife Annual Pension (today's dollars) *</label>
+                                <input type="number" id="p2_pension" name="p2_pension" value="0" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="p2_pension_start_age">Wife Pension Start Age *</label>
+                                <input type="number" id="p2_pension_start_age" name="p2_pension_start_age" value="65" required>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- Account Balances Section -->
+                    <fieldset>
+                        <legend>Account Balances (today's dollars)</legend>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="bal_taxable">Taxable Brokerage Account *</label>
+                                <input type="number" id="bal_taxable" name="bal_taxable" value="700000" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="bal_pretax_p1">Pre-Tax P1 (401k/IRA) *</label>
+                                <input type="number" id="bal_pretax_p1" name="bal_pretax_p1" value="1250000" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="bal_pretax_p2">Pre-Tax P2 (401k/IRA) *</label>
+                                <input type="number" id="bal_pretax_p2" name="bal_pretax_p2" value="1250000" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="bal_roth_p1">Roth P1 *</label>
+                                <input type="number" id="bal_roth_p1" name="bal_roth_p1" value="60000" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="bal_roth_p2">Roth P2 *</label>
+                                <input type="number" id="bal_roth_p2" name="bal_roth_p2" value="60000" required>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- Investment Returns Section -->
+                    <fieldset>
+                        <legend>Expected Annual Returns</legend>
+                        <div class="form-group">
+                            <label for="growth_rate_taxable">Taxable Brokerage Return *</label>
+                            <input type="number" id="growth_rate_taxable" name="growth_rate_taxable" value="0.07" step="0.001" required>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="growth_rate_pretax_p1">P1 Pre-Tax Return *</label>
+                                <input type="number" id="growth_rate_pretax_p1" name="growth_rate_pretax_p1" value="0.07" step="0.001" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="growth_rate_pretax_p2">P2 Pre-Tax Return *</label>
+                                <input type="number" id="growth_rate_pretax_p2" name="growth_rate_pretax_p2" value="0.07" step="0.001" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="growth_rate_roth_p1">P1 Roth Return *</label>
+                                <input type="number" id="growth_rate_roth_p1" name="growth_rate_roth_p1" value="0.07" step="0.001" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="growth_rate_roth_p2">P2 Roth Return *</label>
+                                <input type="number" id="growth_rate_roth_p2" name="growth_rate_roth_p2" value="0.07" step="0.001" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="taxable_basis_ratio">Taxable Basis Ratio *</label>
+                            <input type="number" id="taxable_basis_ratio" name="taxable_basis_ratio" value="0.75" step="0.01" min="0" max="1" required>
+                            <small>Portion of withdrawal that is principal (0.75 = 75% principal, 25% gains)</small>
+                        </div>
+                    </fieldset>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Run Simulation</button>
+                        <button type="reset" class="btn btn-secondary">Reset Form</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="resultsSection" class="card" style="display: none; margin-top: 40px;">
+            <h2>Simulation Results</h2>
+            <div id="resultsContainer"></div>
+        </div>
+
+        <!-- Loading Spinner -->
+        <div id="loadingSpinner" class="loading-spinner" style="display: none;">
+            <div class="spinner"></div>
+            <p>Running simulation...</p>
+        </div>
+
+        <!-- Error Message -->
+        <div id="errorMessage" class="error-message" style="display: none;"></div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
