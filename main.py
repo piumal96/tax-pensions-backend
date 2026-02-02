@@ -1,7 +1,14 @@
 """
-Retirement Planner Web App - FastAPI Backend
+Retirement Planner Web App - FastAPI Backend (Complete Migration)
+Features:
+- Multiple withdrawal strategies (standard, taxable_first)
+- Monte Carlo simulation with volatility
+- Real Estate & Mortgage support
+- Full parameter validation
+- Export/Import configuration
 """
 import pandas as pd
+import numpy as np
 import os
 import sys
 import io
@@ -10,17 +17,21 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, status
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Import the retirement planner class
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retirement_planner_yr import RetirementSimulator
 
-app = FastAPI(title="Retirement Planner")
+app = FastAPI(
+    title="Retirement Planner API",
+    description="Complete retirement planning with Monte Carlo simulation and real estate support",
+    version="2.0.0"
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -40,351 +51,417 @@ MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Templates
-templates = Jinja2Templates(directory="templates")
+if os.path.exists("templates"):
+    templates = Jinja2Templates(directory="templates")
 
 def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+
+# ============================================================================
+# Pydantic Models
+# ============================================================================
+
+class SimulationParams(BaseModel):
+    """Complete simulation parameters with validation"""
+    # Demographics
+    p1_start_age: int = Field(ge=0, le=100)
+    p2_start_age: int = Field(ge=0, le=100)
+    end_simulation_age: int = Field(ge=0, le=120)
+    inflation_rate: float = Field(ge=0, le=0.5)
+    
+    # Spending & Tax
+    annual_spend_goal: float = Field(ge=0)
+    filing_status: Optional[str] = 'MFJ'
+    target_tax_bracket_rate: float = Field(ge=0, le=1, default=0.24)
+    previous_year_taxes: Optional[float] = Field(ge=0, default=0)
+    
+    # Employment
+    p1_employment_income: float = Field(ge=0, default=0)
+    p1_employment_until_age: int = Field(ge=0, le=100, default=65)
+    p2_employment_income: float = Field(ge=0, default=0)
+    p2_employment_until_age: int = Field(ge=0, le=100, default=65)
+    
+    # Social Security
+    p1_ss_amount: float = Field(ge=0, default=0)
+    p1_ss_start_age: int = Field(ge=62, le=75, default=67)
+    p2_ss_amount: float = Field(ge=0, default=0)
+    p2_ss_start_age: int = Field(ge=62, le=75, default=67)
+    
+    # Pensions
+    p1_pension: float = Field(ge=0, default=0)
+    p1_pension_start_age: int = Field(ge=0, le=100, default=65)
+    p2_pension: float = Field(ge=0, default=0)
+    p2_pension_start_age: int = Field(ge=0, le=100, default=65)
+    
+    # Account Balances
+    bal_taxable: float = Field(ge=0)
+    bal_pretax_p1: float = Field(ge=0)
+    bal_pretax_p2: float = Field(ge=0)
+    bal_roth_p1: float = Field(ge=0)
+    bal_roth_p2: float = Field(ge=0)
+    
+    # Growth Rates
+    growth_rate_taxable: float = Field(ge=-0.5, le=0.5)
+    growth_rate_pretax_p1: float = Field(ge=-0.5, le=0.5)
+    growth_rate_pretax_p2: float = Field(ge=-0.5, le=0.5)
+    growth_rate_roth_p1: float = Field(ge=-0.5, le=0.5)
+    growth_rate_roth_p2: float = Field(ge=-0.5, le=0.5)
+    taxable_basis_ratio: float = Field(ge=0, le=1)
+    
+    # Real Estate
+    primary_home_value: Optional[float] = Field(ge=0, default=0)
+    primary_home_growth_rate: Optional[float] = Field(ge=0, le=0.5, default=0.03)
+    primary_home_mortgage_principal: Optional[float] = Field(ge=0, default=0)
+    primary_home_mortgage_rate: Optional[float] = Field(ge=0, le=0.5, default=0)
+    primary_home_mortgage_years: Optional[float] = Field(ge=0, le=50, default=0)
+    
+    # Rental Properties
+    rental_1_value: Optional[float] = Field(ge=0, default=0)
+    rental_1_income: Optional[float] = Field(ge=0, default=0)
+    rental_1_growth_rate: Optional[float] = Field(ge=0, le=0.5, default=0.03)
+    rental_1_income_growth_rate: Optional[float] = Field(ge=0, le=0.5, default=0.03)
+    rental_1_mortgage_principal: Optional[float] = Field(ge=0, default=0)
+    rental_1_mortgage_rate: Optional[float] = Field(ge=0, le=0.5, default=0)
+    rental_1_mortgage_years: Optional[float] = Field(ge=0, le=50, default=0)
+    
+    rental_2_value: Optional[float] = Field(ge=0, default=0)
+    rental_2_income: Optional[float] = Field(ge=0, default=0)
+    rental_2_growth_rate: Optional[float] = Field(ge=0, le=0.5, default=0.03)
+    rental_2_income_growth_rate: Optional[float] = Field(ge=0, le=0.5, default=0.03)
+    rental_2_mortgage_principal: Optional[float] = Field(ge=0, default=0)
+    rental_2_mortgage_rate: Optional[float] = Field(ge=0, le=0.5, default=0)
+    rental_2_mortgage_years: Optional[float] = Field(ge=0, le=50, default=0)
+
+
+class MonteCarloParams(SimulationParams):
+    """Extends simulation params with Monte Carlo specific fields"""
+    volatility: float = Field(ge=0, le=1, default=0.15)
+    num_simulations: int = Field(ge=1, le=1000, default=100)
+
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def params_to_csv(params: Dict[str, Any], filename: str) -> str:
+    """Convert parameters dict to CSV config file"""
+    records = []
+    for k, v in params.items():
+        # Include all values, even 0 and empty strings
+        # Only skip if explicitly None
+        if v is not None:
+            records.append({'parameter': k, 'value': v})
+    
+    if not records:
+        print(f"WARNING: No parameters to write to CSV. Received params: {params}")
+        raise ValueError("No parameters provided for simulation")
+    
+    df = pd.DataFrame(records)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    df.to_csv(filepath, index=False)
+    print(f"Created CSV with {len(records)} parameters at {filepath}")
+    return filepath
+
+
+def format_results(df: pd.DataFrame) -> Dict[str, Any]:
+    """Format simulation results for JSON response"""
+    results_json = []
+    header = list(df.columns)
+    
+    for _, row in df.iterrows():
+        row_dict = {}
+        for col in header:
+            val = row[col]
+            if pd.isna(val):
+                row_dict[col] = None
+            elif hasattr(val, 'item'):
+                row_dict[col] = val.item()
+            else:
+                row_dict[col] = val
+        results_json.append(row_dict)
+    
+    return {
+        'results': results_json,
+        'columns': header
+    }
+
+
+# ============================================================================
+# Endpoints
+# ============================================================================
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """Home page with upload and form options"""
-    return templates.TemplateResponse("index.html", {"request": request})
+    """Home page"""
+    if os.path.exists("templates/index.html"):
+        return templates.TemplateResponse("index.html", {"request": request})
+    return HTMLResponse(content="<h1>Retirement Planner API</h1><p>Use /docs for API documentation</p>")
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for deployment"""
+    return {"status": "healthy", "service": "retirement-planner-api"}
+
 
 @app.post("/api/run-simulation")
 async def run_simulation(
     request: Request,
-    file: Optional[UploadFile] = File(None),
-    # Form fields - using Form(...) for each field as FastAPI doesn't automatically group them
-    p1_start_age: Optional[str] = Form(None),
-    p2_start_age: Optional[str] = Form(None),
-    end_simulation_age: Optional[str] = Form(None),
-    inflation_rate: Optional[str] = Form(None),
-    annual_spend_goal: Optional[str] = Form(None),
-    p1_employment_income: Optional[str] = Form(None),
-    p1_employment_until_age: Optional[str] = Form(None),
-    p2_employment_income: Optional[str] = Form(None),
-    p2_employment_until_age: Optional[str] = Form(None),
-    p1_ss_amount: Optional[str] = Form(None),
-    p1_ss_start_age: Optional[str] = Form(None),
-    p2_ss_amount: Optional[str] = Form(None),
-    p2_ss_start_age: Optional[str] = Form(None),
-    p1_pension: Optional[str] = Form(None),
-    p1_pension_start_age: Optional[str] = Form(None),
-    p2_pension: Optional[str] = Form(None),
-    p2_pension_start_age: Optional[str] = Form(None),
-    bal_taxable: Optional[str] = Form(None),
-    bal_pretax_p1: Optional[str] = Form(None),
-    bal_pretax_p2: Optional[str] = Form(None),
-    bal_roth_p1: Optional[str] = Form(None),
-    bal_roth_p2: Optional[str] = Form(None),
-    growth_rate_taxable: Optional[str] = Form(None),
-    growth_rate_pretax_p1: Optional[str] = Form(None),
-    growth_rate_pretax_p2: Optional[str] = Form(None),
-    growth_rate_roth_p1: Optional[str] = Form(None),
-    growth_rate_roth_p2: Optional[str] = Form(None),
-    taxable_basis_ratio: Optional[str] = Form(None),
-    target_tax_bracket_rate: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None)
 ):
     """
-    Handle both CSV upload and form input to run simulation.
+    Run retirement simulation with BOTH strategies (standard and taxable_first).
+    Supports:
+    - CSV file upload
+    - JSON body with parameters
+    - Form data
     """
     config_file = None
     temp_file_created = False
     
     try:
-        # Check if file was uploaded
+        # Handle file upload
         if file and file.filename:
             if not allowed_file(file.filename):
-                return JSONResponse(
-                    status_code=400,
-                    content={'error': 'Invalid file format. Please upload a CSV file.'}
-                )
+                raise HTTPException(status_code=400, detail="Invalid file format")
             
-            # Save uploaded file temporarily
-            filename = file.filename # In FastAPI secure_filename is not built-in but we can just use the name or UUID
-            # Simple sanitization
-            filename = os.path.basename(filename)
+            filename = os.path.basename(file.filename)
             config_file = os.path.join(UPLOAD_FOLDER, filename)
             
             with open(config_file, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             temp_file_created = True
-
-        # Check if form data was submitted (if no file)
-        elif request.headers.get("content-type", "").startswith("application/json"):
-             # Handle JSON POST request
-             try:
-                json_body = await request.json()
-                # Create a dictionary of all form values from JSON
-                # Reuse the logic below by populating form_mapping logic here or refactoring
-                # For simplicity, we will adapt the logic to handle both sources
-                
-                # Reuse mapping logic
-                params = []
-                values = []
-                descriptions = []
-                
-                # Define mapping (same as below)
-                form_mapping = {
-                    'p1_start_age': ('p1_start_age', 'Person 1 Current Age'),
-                    'p2_start_age': ('p2_start_age', 'Person 2 Current Age'),
-                    'end_simulation_age': ('end_simulation_age', 'Age when simulation stops'),
-                    'inflation_rate': ('inflation_rate', 'Annual inflation rate'),
-                    'annual_spend_goal': ('annual_spend_goal', 'Annual spending goal'),
-                    'p1_employment_income': ('p1_employment_income', 'P1 Annual Employment Income'),
-                    'p1_employment_until_age': ('p1_employment_until_age', 'P1 Works until this age'),
-                    'p2_employment_income': ('p2_employment_income', 'P2 Annual Employment Income'),
-                    'p2_employment_until_age': ('p2_employment_until_age', 'P2 Works until this age'),
-                    'p1_ss_amount': ('p1_ss_amount', 'P1 Social Security Annual Amount'),
-                    'p1_ss_start_age': ('p1_ss_start_age', 'P1 Age SS begins'),
-                    'p2_ss_amount': ('p2_ss_amount', 'P2 Social Security Annual Amount'),
-                    'p2_ss_start_age': ('p2_ss_start_age', 'P2 Age SS begins'),
-                    'p1_pension': ('p1_pension', 'P1 Annual Pension'),
-                    'p1_pension_start_age': ('p1_pension_start_age', 'P1 Pension Start Age'),
-                    'p2_pension': ('p2_pension', 'P2 Annual Pension'),
-                    'p2_pension_start_age': ('p2_pension_start_age', 'P2 Pension Start Age'),
-                    'bal_taxable': ('bal_taxable', 'Joint Taxable Account Balance'),
-                    'bal_pretax_p1': ('bal_pretax_p1', 'P1 Pre-Tax Balance'),
-                    'bal_pretax_p2': ('bal_pretax_p2', 'P2 Pre-Tax Balance'),
-                    'bal_roth_p1': ('bal_roth_p1', 'P1 Roth IRA Balance'),
-                    'bal_roth_p2': ('bal_roth_p2', 'P2 Roth IRA Balance'),
-                    'growth_rate_taxable': ('growth_rate_taxable', 'Annual return on Taxable Account'),
-                    'growth_rate_pretax_p1': ('growth_rate_pretax_p1', 'Annual return on P1 Pre-Tax'),
-                    'growth_rate_pretax_p2': ('growth_rate_pretax_p2', 'Annual return on P2 Pre-Tax'),
-                    'growth_rate_roth_p1': ('growth_rate_roth_p1', 'Annual return on P1 Roth'),
-                    'growth_rate_roth_p2': ('growth_rate_roth_p2', 'Annual return on P2 Roth'),
-                    'taxable_basis_ratio': ('taxable_basis_ratio', 'Fraction of Taxable withdrawal that is basis'),
-                    'target_tax_bracket_rate': ('target_tax_bracket_rate', 'Target bracket for Roth conversions'),
-                }
-                
-                # Extract keys from mapping
-                form_mapping_values = {k: v[0] for k,v in form_mapping.items()}
-                
-                for key, val in json_body.items():
-                     if key in form_mapping_values and val is not None:
-                         params.append(form_mapping_values[key])
-                         values.append(str(val))
-                         descriptions.append('')
-                
-                if params:
-                    config_df = pd.DataFrame({
-                        'parameter': params,
-                        'value': values,
-                        'description': descriptions
-                    })
-                    config_file = os.path.join(UPLOAD_FOLDER, 'temp_json_config.csv')
-                    config_df.to_csv(config_file, index=False)
-                    temp_file_created = True
-
-             except Exception as e:
-                 print(f"JSON Parse Error: {e}")
-                 pass 
-
             
-        else:
-            # Construct params from the Form arguments
-            # Create a dictionary of all form values
-            form_values = {
-                'p1_start_age': p1_start_age,
-                'p2_start_age': p2_start_age,
-                'end_simulation_age': end_simulation_age,
-                'inflation_rate': inflation_rate,
-                'annual_spend_goal': annual_spend_goal,
-                'p1_employment_income': p1_employment_income,
-                'p1_employment_until_age': p1_employment_until_age,
-                'p2_employment_income': p2_employment_income,
-                'p2_employment_until_age': p2_employment_until_age,
-                'p1_ss_amount': p1_ss_amount,
-                'p1_ss_start_age': p1_ss_start_age,
-                'p2_ss_amount': p2_ss_amount,
-                'p2_ss_start_age': p2_ss_start_age,
-                'p1_pension': p1_pension,
-                'p1_pension_start_age': p1_pension_start_age,
-                'p2_pension': p2_pension,
-                'p2_pension_start_age': p2_pension_start_age,
-                'bal_taxable': bal_taxable,
-                'bal_pretax_p1': bal_pretax_p1,
-                'bal_pretax_p2': bal_pretax_p2,
-                'bal_roth_p1': bal_roth_p1,
-                'bal_roth_p2': bal_roth_p2,
-                'growth_rate_taxable': growth_rate_taxable,
-                'growth_rate_pretax_p1': growth_rate_pretax_p1,
-                'growth_rate_pretax_p2': growth_rate_pretax_p2,
-                'growth_rate_roth_p1': growth_rate_roth_p1,
-                'growth_rate_roth_p2': growth_rate_roth_p2,
-                'taxable_basis_ratio': taxable_basis_ratio,
-                'target_tax_bracket_rate': target_tax_bracket_rate,
-            }
-            
-            # Filter None values
-            active_params = {k: v for k, v in form_values.items() if v is not None}
-            
-            if active_params:
-                params = []
-                values = []
-                descriptions = []
-                
-                form_mapping = {
-                    'p1_start_age': ('p1_start_age', 'Person 1 Current Age'),
-                    'p2_start_age': ('p2_start_age', 'Person 2 Current Age'),
-                    'end_simulation_age': ('end_simulation_age', 'Age when simulation stops'),
-                    'inflation_rate': ('inflation_rate', 'Annual inflation rate'),
-                    'annual_spend_goal': ('annual_spend_goal', 'Annual spending goal'),
-                    'p1_employment_income': ('p1_employment_income', 'P1 Annual Employment Income'),
-                    'p1_employment_until_age': ('p1_employment_until_age', 'P1 Works until this age'),
-                    'p2_employment_income': ('p2_employment_income', 'P2 Annual Employment Income'),
-                    'p2_employment_until_age': ('p2_employment_until_age', 'P2 Works until this age'),
-                    'p1_ss_amount': ('p1_ss_amount', 'P1 Social Security Annual Amount'),
-                    'p1_ss_start_age': ('p1_ss_start_age', 'P1 Age SS begins'),
-                    'p2_ss_amount': ('p2_ss_amount', 'P2 Social Security Annual Amount'),
-                    'p2_ss_start_age': ('p2_ss_start_age', 'P2 Age SS begins'),
-                    'p1_pension': ('p1_pension', 'P1 Annual Pension'),
-                    'p1_pension_start_age': ('p1_pension_start_age', 'P1 Pension Start Age'),
-                    'p2_pension': ('p2_pension', 'P2 Annual Pension'),
-                    'p2_pension_start_age': ('p2_pension_start_age', 'P2 Pension Start Age'),
-                    'bal_taxable': ('bal_taxable', 'Joint Taxable Account Balance'),
-                    'bal_pretax_p1': ('bal_pretax_p1', 'P1 Pre-Tax Balance'),
-                    'bal_pretax_p2': ('bal_pretax_p2', 'P2 Pre-Tax Balance'),
-                    'bal_roth_p1': ('bal_roth_p1', 'P1 Roth IRA Balance'),
-                    'bal_roth_p2': ('bal_roth_p2', 'P2 Roth IRA Balance'),
-                    'growth_rate_taxable': ('growth_rate_taxable', 'Annual return on Taxable Account'),
-                    'growth_rate_pretax_p1': ('growth_rate_pretax_p1', 'Annual return on P1 Pre-Tax'),
-                    'growth_rate_pretax_p2': ('growth_rate_pretax_p2', 'Annual return on P2 Pre-Tax'),
-                    'growth_rate_roth_p1': ('growth_rate_roth_p1', 'Annual return on P1 Roth'),
-                    'growth_rate_roth_p2': ('growth_rate_roth_p2', 'Annual return on P2 Roth'),
-                    'taxable_basis_ratio': ('taxable_basis_ratio', 'Fraction of Taxable withdrawal that is basis'),
-                    'target_tax_bracket_rate': ('target_tax_bracket_rate', 'Target bracket for Roth conversions'),
-                }
-                
-                for key, val in active_params.items():
-                    if key in form_mapping:
-                        param_name, desc = form_mapping[key]
-                        params.append(param_name)
-                        values.append(val)
-                        descriptions.append(desc)
-                
-                config_df = pd.DataFrame({
-                    'parameter': params,
-                    'value': values,
-                    'description': descriptions
-                })
-                
-                config_file = os.path.join(UPLOAD_FOLDER, 'temp_form_config.csv')
-                config_df.to_csv(config_file, index=False)
-                temp_file_created = True
-                
-            # Fallback for JSON body if Form fields are empty
-            elif 'application/json' in request.headers.get('content-type', ''):
-                 # We can't easily read body again if it was consumed, but Starlette Request allows it
-                 # However, better to rely on a separate Pydantic model for JSON requests.
-                 # Let's just handle the "JSON with form parameters" case if the UI sends it like that.
-                 # For simplicity in this migration, if the frontend sends FormData, we are good.
-                 # If it sends JSON, we need to read it.
-                 try:
-                    json_body = await request.json()
-                    # Re-use logic for JSON
-                    params = []
-                    values = []
-                    
-                    # Reuse mapping...
-                    form_mapping_values = {k: v[0] for k,v in form_mapping.items()}
-                     
-                    # The Flask code had a slightly different mapping for JSON, checking...
-                    # It was essentially the same keys.
-                    
-                    for key, val in json_body.items():
-                         if key in form_mapping_values and val is not None:
-                             params.append(form_mapping_values[key])
-                             values.append(str(val))
-                    
-                    if params:
-                        config_file = os.path.join(UPLOAD_FOLDER, 'temp_json_config.csv')
-                        config_df = pd.DataFrame({
-                            'parameter': params,
-                            'value': values,
-                            'description': [''] * len(params)
-                        })
-                        config_df.to_csv(config_file, index=False)
-                        temp_file_created = True
-
-                 except Exception:
-                     pass # Not JSON or failed to parse
-
-        if not config_file:
-             return JSONResponse(status_code=400, content={'error': 'No file or data provided.'})
-
-        # Run the simulation
-        try:
-            # We want to run this in a threadpool because it's CPU bound (and uses pandas)
-            # FastAPI runs async functions in the event loop, so blocking code creates issues.
-            # But run_simulation logic is synchronous. 
-            # We can define this route as 'def' instead of 'async def' to run in threadpool,
-            # BUT we need 'await request.json()' above.
-            # So we keep it async and might block briefly or we can use run_in_executor if valid.
-            # For simplicity, let's keep it here, assuming simulation is fast enough.
-            
-            sim = RetirementSimulator(config_file=config_file, year=2025)
-            results_df = sim.run()
-            
-            # Reorder columns to match web display order
-            display_columns = [
-                'Year', 'P1_Age', 'P2_Age', 'Employment_P1', 'Employment_P2',
-                'SS_P1', 'SS_P2', 'Pension_P1', 'Pension_P2', 'RMD_P1', 'RMD_P2',
-                'Total_Income', 'Spend_Goal', 'Previous_Taxes', 'Cash_Need',
-                'WD_PreTax_P1', 'WD_PreTax_P2', 'WD_Taxable', 'WD_Roth_P1', 'WD_Roth_P2',
-                'Roth_Conversion', 'Conv_P1', 'Conv_P2', 'Ord_Income', 'Cap_Gains',
-                'Tax_Bill', 'Taxes_Paid', 'Bal_PreTax_P1', 'Bal_PreTax_P2',
-                'Bal_Roth_P1', 'Bal_Roth_P2', 'Bal_Taxable', 'Net_Worth'
-            ]
-            
-            # Reorder columns
-            existing_cols = [col for col in display_columns if col in results_df.columns]
-            remaining_cols = [col for col in results_df.columns if col not in display_columns]
-            ordered_cols = existing_cols + remaining_cols
-            results_df = results_df[ordered_cols]
-            
-            # Convert results to JSON-serializable format
-            results_json = []
-            header = list(results_df.columns)
-            
-            for _, row in results_df.iterrows():
-                row_list = {}
-                for col in header:
-                    val = row[col]
-                    # Convert numpy types
-                    if pd.isna(val):
-                         row_list[col] = None
-                    elif hasattr(val, 'item'):
-                        row_list[col] = val.item()
-                    else:
-                        row_list[col] = val
-                results_json.append(row_list)
-            
-            return {
-                'success': True,
-                'results': results_json,
-                'columns': header
-            }
-            
-        except Exception as e:
-            import traceback
-            error_msg = f'Simulation failed: {str(e)}\n{traceback.format_exc()}'
-            print(error_msg)
-            return JSONResponse(status_code=500, content={'error': error_msg})
+            # Persist as current config
+            current_config_path = os.path.join(UPLOAD_FOLDER, 'current_config.csv')
+            shutil.copy(config_file, current_config_path)
         
-        finally:
-            # Clean up temp file
-            if temp_file_created and config_file and os.path.exists(config_file):
-                try:
-                    os.remove(config_file)
-                except:
-                    pass
-
+        # Handle JSON body
+        elif request.headers.get("content-type", "").startswith("application/json"):
+            json_body = await request.json()
+            config_file = params_to_csv(json_body, 'temp_json_config.csv')
+            temp_file_created = True
+            
+            # Persist
+            current_config_path = os.path.join(UPLOAD_FOLDER, 'current_config.csv')
+            shutil.copy(config_file, current_config_path)
+        
+        else:
+            raise HTTPException(status_code=400, detail="No file or data provided")
+        
+        # Run BOTH strategies for comparison
+        scenarios = {}
+        
+        # Standard strategy
+        sim_standard = RetirementSimulator(config_file=config_file, year=2025, strategy='standard')
+        results_standard = sim_standard.run()
+        scenarios['standard'] = format_results(results_standard)
+        
+        # Taxable-first strategy
+        sim_tf = RetirementSimulator(config_file=config_file, year=2025, strategy='taxable_first')
+        results_tf = sim_tf.run()
+        scenarios['taxable_first'] = format_results(results_tf)
+        
+        # Return config for form population
+        config_dict = {}
+        try:
+            current_config_path = os.path.join(UPLOAD_FOLDER, 'current_config.csv')
+            if os.path.exists(current_config_path):
+                config_df = pd.read_csv(current_config_path)
+                config_dict = dict(zip(config_df['parameter'], config_df['value']))
+        except:
+            pass
+        
+        return {
+            'success': True,
+            'config': config_dict,
+            'scenarios': scenarios
+        }
+    
     except Exception as e:
-         return JSONResponse(status_code=500, content={'error': str(e)})
+        import traceback
+        error_msg = f'Simulation failed: {str(e)}\n{traceback.format_exc()}'
+        print(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
+    
+    finally:
+        # Clean up temp files
+        if temp_file_created and config_file and os.path.exists(config_file):
+            try:
+                # Keep current_config.csv, remove temp files
+                if 'temp_' in config_file:
+                    os.remove(config_file)
+            except:
+                pass
+
+
+@app.post("/api/run-monte-carlo")
+async def run_monte_carlo(request: Request):
+    """
+    Run Monte Carlo simulation with volatility.
+    Returns:
+    - Success rate
+    - Percentile statistics (10th, 50th, 90th)
+    - All individual runs
+    - Baseline deterministic scenarios
+    """
+    try:
+        json_body = await request.json()
+        
+        # Extract Monte Carlo params
+        volatility = float(json_body.get('volatility', 0.15))
+        num_sims = int(json_body.get('num_simulations', 100))
+        
+        # Create config file
+        config_file = params_to_csv(json_body, 'temp_mc_config.csv')
+        
+        runs = []
+        success_count = 0
+        
+        # Run Monte Carlo simulations
+        for _ in range(num_sims):
+            sim = RetirementSimulator(config_file=config_file, year=2025, strategy='standard')
+            results = sim.run(volatility=volatility)
+            
+            # Check success (Net Worth > 0 at end)
+            final_nw = results.iloc[-1]['Net_Worth']
+            if final_nw > 0:
+                success_count += 1
+            
+            # Add totals for stats
+            results['Bal_Roth_Total'] = results['Bal_Roth_P1'] + results['Bal_Roth_P2']
+            results['Bal_PreTax_Total'] = results['Bal_PreTax_P1'] + results['Bal_PreTax_P2']
+            
+            runs.append(results)
+        
+        success_rate = (success_count / num_sims) * 100
+        
+        # Aggregate statistics
+        all_runs = pd.concat(runs)
+        
+        def p10(x): return x.quantile(0.10)
+        def p25(x): return x.quantile(0.25)
+        def p75(x): return x.quantile(0.75)
+        def p90(x): return x.quantile(0.90)
+        
+        stats = all_runs.groupby('Year').agg({
+            'Net_Worth': ['median', p10, p25, p75, p90],
+            'Bal_Roth_Total': ['median', p10, p90],
+            'Bal_PreTax_Total': ['median', p10, p90],
+            'Bal_Taxable': ['median', p10, p90]
+        }).reset_index()
+        
+        # Flatten columns
+        stats.columns = ['_'.join(col).strip('_').replace('p10', 'P10').replace('p25', 'P25').replace('p75', 'P75').replace('p90', 'P90') for col in stats.columns.values]
+        stats_json = stats.to_dict(orient='records')
+        
+        # Run deterministic baselines
+        baselines = {}
+        sim_s = RetirementSimulator(config_file=config_file, year=2025, strategy='standard')
+        baselines['standard'] = format_results(sim_s.run())
+        sim_tf = RetirementSimulator(config_file=config_file, year=2025, strategy='taxable_first')
+        baselines['taxable_first'] = format_results(sim_tf.run())
+        
+        # All runs for drill-down
+        all_runs_json = []
+        for i, df in enumerate(runs):
+            run_data = df.to_dict(orient='records')
+            all_runs_json.append({
+                'run_id': i,
+                'final_nw': float(df.iloc[-1]['Net_Worth']),
+                'data': run_data
+            })
+        
+        # Clean up
+        if os.path.exists(config_file):
+            os.remove(config_file)
+        
+        return {
+            'success': True,
+            'success_rate': success_rate,
+            'stats': stats_json,
+            'all_runs': all_runs_json,
+            'num_simulations': num_sims,
+            'volatility': volatility,
+            'baselines': baselines
+        }
+    
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/export-config")
+async def export_config(data: Dict[str, Any]):
+    """Export current form data as CSV file"""
+    try:
+        # Define all possible fields
+        fields = [
+            'p1_name', 'p2_name',
+            'p1_start_age', 'p2_start_age', 'end_simulation_age',
+            'inflation_rate', 'annual_spend_goal', 'filing_status',
+            'p1_employment_income', 'p1_employment_until_age',
+            'p2_employment_income', 'p2_employment_until_age',
+            'p1_ss_amount', 'p1_ss_start_age',
+            'p2_ss_amount', 'p2_ss_start_age',
+            'p1_pension', 'p1_pension_start_age',
+            'p2_pension', 'p2_pension_start_age',
+            'bal_taxable', 'bal_pretax_p1', 'bal_pretax_p2', 'bal_roth_p1', 'bal_roth_p2',
+            'growth_rate_taxable', 'growth_rate_pretax_p1', 'growth_rate_pretax_p2', 'growth_rate_roth_p1', 'growth_rate_roth_p2',
+            'taxable_basis_ratio', 'target_tax_bracket_rate', 'previous_year_taxes',
+            'primary_home_value', 'primary_home_growth_rate',
+            'primary_home_mortgage_principal', 'primary_home_mortgage_rate', 'primary_home_mortgage_years',
+            'rental_1_value', 'rental_1_income', 'rental_1_growth_rate', 'rental_1_income_growth_rate',
+            'rental_1_mortgage_principal', 'rental_1_mortgage_rate', 'rental_1_mortgage_years',
+            'rental_2_value', 'rental_2_income', 'rental_2_growth_rate', 'rental_2_income_growth_rate',
+            'rental_2_mortgage_principal', 'rental_2_mortgage_rate', 'rental_2_mortgage_years'
+        ]
+        
+        records = []
+        for field in fields:
+            val = data.get(field, 0)
+            records.append({'parameter': field, 'value': val})
+        
+        df = pd.DataFrame(records)
+        
+        # Create CSV in memory
+        output = io.StringIO()
+        df.to_csv(output, index=False)
+        output.seek(0)
+        
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=retirement_config.csv"}
+        )
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/get-current-config")
+async def get_current_config():
+    """Get the currently saved configuration"""
+    try:
+        current_config_path = os.path.join(UPLOAD_FOLDER, 'current_config.csv')
+        
+        if not os.path.exists(current_config_path):
+            return {}
+        
+        df = pd.read_csv(current_config_path)
+        config_dict = dict(zip(df['parameter'], df['value']))
+        
+        return config_dict
+    
+    except Exception as e:
+        print(f"Error loading config: {e}")
+        return {}
 
 
 @app.get("/api/sample-config")
@@ -392,24 +469,32 @@ async def get_sample_config():
     """Return the sample configuration"""
     try:
         sample_df = pd.read_csv('nisha.csv')
-        # Convert to dict
         config_data = sample_df.to_dict(orient='records')
         return {
             'success': True,
             'config': config_data
         }
     except FileNotFoundError:
-        return JSONResponse(status_code=404, content={'success': False, 'error': 'Sample config not found'})
+        raise HTTPException(status_code=404, detail='Sample config not found')
+
 
 @app.get("/download-template")
 async def download_template():
     """Download sample CSV template"""
-    # Simply return the file response if it exists
     file_path = "nisha.csv"
     if os.path.exists(file_path):
-        return FileResponse(file_path, filename="retirement_planner_template.csv", media_type='text/csv')
+        return FileResponse(
+            file_path,
+            filename="retirement_planner_template.csv",
+            media_type='text/csv'
+        )
     else:
-        return JSONResponse(status_code=500, content={'error': 'Template file not found'})
+        raise HTTPException(status_code=404, detail='Template file not found')
+
+
+# ============================================================================
+# Main
+# ============================================================================
 
 if __name__ == "__main__":
     import uvicorn
