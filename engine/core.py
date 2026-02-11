@@ -147,6 +147,9 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
         market_adj = 0.0
         if volatility > 0:
             market_adj = np.random.normal(0, volatility)
+        
+        # Calculate actual market return for this year (base + volatility adjustment)
+        actual_market_return = config['growth_rate_taxable'] + market_adj
             
         b_taxable *= (1 + config['growth_rate_taxable'] + market_adj)
         b_pretax_p1 *= (1 + config['growth_rate_pretax_p1'] + market_adj)
@@ -335,7 +338,7 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
             'Primary_Home': round(primary_home_value),
             'Rental_Assets': round(current_rental_value_total),
             'Net_Worth': round(net_worth),
-            'Market_Return': round(config['growth_rate_taxable'], 3) # Or avg
+            'Market_Return': round(actual_market_return * 100, 2)  # Store as percentage (e.g., 7.5 for 7.5%)
         })
         
         # Advance ages
