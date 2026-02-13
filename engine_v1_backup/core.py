@@ -1,6 +1,5 @@
 import numpy as np
 from engine.real_estate import Mortgage
-from engine.debts import initialize_debts, process_all_debt_payments, get_total_debt_balance
 from engine.taxes import TaxCalculator
 from engine.withdrawals import StandardStrategy, TaxableFirstStrategy
 
@@ -100,45 +99,6 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
     }
     
     primary_mortgage, rental_mortgages = initialize_mortgages(config)
-    
-    # Initialize debts
-    debts = initialize_debts(config)
-    
-    # Initialize healthcare tracking
-    medical_inflation_idx = 1.0
-    medical_inflation_rate = config.get('medical_inflation_rate', 0.06)
-    
-    # Initialize business income tracking
-    business_income_current = config.get('business_income', 0)
-    business_growth_rate = config.get('business_growth_rate', 0.03)
-    business_ends_at_age = config.get('business_ends_at_age', 65)
-    
-    # Initialize passive income tracking  
-    passive_income_current = config.get('passive_income', 0)
-    passive_income_growth_rate = config.get('passive_income_growth_rate', 0.02)
-    
-    # Initialize rent tracking (if renting)
-    monthly_rent = config.get('monthly_rent', 0)
-    rent_inflation_rate = config.get('rent_inflation_rate', 0.03)
-    annual_rent = monthly_rent * 12
-    
-    # Initialize life insurance
-    life_insurance_premium = config.get('life_insurance_premium', 0)
-    life_insurance_type = config.get('life_insurance_type', 'none')
-    life_insurance_term_ends = config.get('life_insurance_term_ends_at_age', 65)
-    
-    # Initialize children tracking
-    num_children = config.get('num_children', 0)
-    child_ages = []
-    for i in range(1, num_children + 1):
-        child_age = config.get(f'child_{i}_current_age', 0)
-        child_ages.append(child_age)
-    
-    # Child expense defaults (can be customized)
-    expense_0_5 = config.get('monthly_expense_per_child_0_5', 500)
-    expense_6_12 = config.get('monthly_expense_per_child_6_12', 800)
-    expense_13_17 = config.get('monthly_expense_per_child_13_17', 1000)
-    college_cost_per_year = config.get('college_cost_per_year', 25000)
     
     # Initialize ages
     p1_age = int(config['p1_start_age'])
@@ -253,15 +213,6 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
             
         pens_total = pens_p1 + pens_p2
         
-        # Business Income
-        business_income_this_year = 0
-        if p1_age < business_ends_at_age and business_income_current > 0:
-            business_income_this_year = business_income_current
-            business_income_current *= (1 + business_growth_rate)
-        
-        # Passive Income
-        passive_income_this_year = passive_income_current * inflation_idx
-        
         # RMD Calculations
         rmd_p1 = 0
         if p1_age >= 73 and b_pretax_p1 > 0:
@@ -289,56 +240,10 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
             if not m.is_paid_off():
                 m.make_payment(12)
                 total_mortgage_payment += m.get_annual_payment()
-        
-        # --- 3b. Debts ---
-        total_debt_payment, debt_interest_paid, remaining_debt = process_all_debt_payments(debts, 12)
-        
-        # --- 3c. Healthcare ---
-        medical_expenses_this_year = config.get('annual_medical_expenses', 0) * medical_inflation_idx
-        medical_inflation_idx *= (1 + medical_inflation_rate)
-        
-        # --- 3d. Rent (if applicable) ---
-        rent_this_year = 0
-        if monthly_rent > 0:
-            rent_this_year = annual_rent
-            annual_rent *= (1 + rent_inflation_rate)
-        
-        # --- 3e. Life Insurance ---
-        insurance_premium_this_year = 0
-        if life_insurance_type != 'none' and life_insurance_premium > 0:
-            if life_insurance_type == 'term':
-                # Term insurance ends at specified age
-                if p1_age < life_insurance_term_ends:
-                    insurance_premium_this_year = life_insurance_premium * 12
-            else:
-                # Whole life continues
-                insurance_premium_this_year = life_insurance_premium * 12
-        
-        # --- 3f. Kids & Dependents ---
-        child_expenses_this_year = 0
-        college_expenses_this_year = 0
-        
-        for i, child_age in enumerate(child_ages):
-            if child_age < 18:
-                # Determine age-based expense
-                if child_age <= 5:
-                    child_expenses_this_year += expense_0_5 * 12
-                elif child_age <= 12:
-                    child_expenses_this_year += expense_6_12 * 12
-                else:  # 13-17
-                    child_expenses_this_year += expense_13_17 * 12
-            elif 18 <= child_age < 22:
-                # College years (ages 18-21 = 4 years)
-                college_expenses_this_year += college_cost_per_year
-            
-            # Age the child for next year
-            child_ages[i] += 1
                 
-        # --- 3g. Cash Need ---
+        # --- 3b. Cash Need ---
         spend_goal = config['annual_spend_goal'] * inflation_idx
-        cash_need = (spend_goal + total_mortgage_payment + previous_year_taxes + 
-                     total_debt_payment + medical_expenses_this_year + rent_this_year +
-                     insurance_premium_this_year + child_expenses_this_year + college_expenses_this_year)
+        cash_need = spend_goal + total_mortgage_payment + previous_year_taxes
         
         # --- 4. Withdrawals ---
         strategy_inputs = {
@@ -371,9 +276,9 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
         conv_p1 = s_res['conv_p1']
         conv_p2 = s_res['conv_p2']
         
-        total_income = emp_p1 + emp_p2 + ss_total + pens_total + rmd_total + current_rental_income + business_income_this_year + passive_income_this_year
+        total_income = emp_p1 + emp_p2 + ss_total + pens_total + rmd_total + current_rental_income
         
-        # --- 5. Update Balances (Withdrawals) ---
+        # --- 5. Update Balances ---
         b_pretax_p1 -= (rmd_p1 + wd_pretax_p1 + conv_p1)
         b_pretax_p2 -= (rmd_p2 + wd_pretax_p2 + conv_p2)
         b_roth_p1 += conv_p1
@@ -382,126 +287,9 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
         b_roth_p2 -= wd_roth_p2
         b_taxable -= wd_taxable
         
-        # --- 5a. HANDLE INCOME SURPLUS (Accumulation Phase Fix) ---
-        # This is the critical fix for income accumulation during working years
-        
-        # Calculate total cash income available
-        total_cash_income = emp_p1 + emp_p2 + ss_total + pens_total + current_rental_income + business_income_this_year + passive_income_this_year
-        
-        # Calculate total cash needed (before withdrawals)
-        total_cash_needed = (spend_goal + total_mortgage_payment + previous_year_taxes +
-                            total_debt_payment + medical_expenses_this_year + rent_this_year +
-                            insurance_premium_this_year + child_expenses_this_year + college_expenses_this_year)
-        
-        # Calculate surplus (positive) or shortfall (negative)
-        cash_surplus = total_cash_income - total_cash_needed
-        
-        # Track contributions for reporting
-        contrib_p1_401k = 0
-        contrib_p2_401k = 0
-        match_p1 = 0
-        match_p2 = 0
-        contrib_strategy_used = 'None'
-        
-        # If we have surplus income, allocate it optimally to accounts
-        if cash_surplus > 0:
-            # Get configuration parameters (with defaults)
-            p1_contrib_rate = config.get('p1_401k_contribution_rate', 0.15)
-            p2_contrib_rate = config.get('p2_401k_contribution_rate', 0.15)
-            p1_match_rate = config.get('p1_401k_employer_match_rate', 0.05)
-            p2_match_rate = config.get('p2_401k_employer_match_rate', 0.05)
-            p1_force_roth = config.get('p1_401k_is_roth', False)
-            p2_force_roth = config.get('p2_401k_is_roth', False)
-            auto_optimize = config.get('auto_optimize_roth_traditional', True)
-            
-            # Estimate current marginal tax rate
-            adj_std_ded = tax_calc.std_deduction * inflation_idx
-            taxable_income = max(0, total_cash_income - adj_std_ded)
-            adj_brackets = [(lim * inflation_idx, rate) for lim, rate in tax_calc.brackets_ordinary]
-            
-            current_marginal_rate = 0.24
-            for limit, rate in adj_brackets:
-                if taxable_income <= limit:
-                    current_marginal_rate = rate
-                    break
-            
-            # Decide Roth vs Traditional (tax arbitrage optimization)
-            target_rate = config.get('target_tax_bracket_rate', 0.24)
-            
-            remaining_surplus = cash_surplus
-            
-            # --- Person 1: 401k contributions (if employed) ---
-            if p1_age < config['p1_employment_until_age'] and emp_p1 > 0:
-                # IRS limits for 2024
-                max_contrib_p1 = 30500 if p1_age >= 50 else 23000
-                
-                # Employee contribution
-                employee_contrib_p1 = min(
-                    emp_p1 * p1_contrib_rate,
-                    max_contrib_p1,
-                    remaining_surplus
-                )
-                contrib_p1_401k = employee_contrib_p1
-                
-                # Employer match
-                match_p1 = min(emp_p1 * p1_match_rate, max_contrib_p1)
-                
-                # Decide Roth vs Traditional for P1
-                if p1_force_roth:
-                    use_roth_p1 = True
-                elif auto_optimize:
-                    use_roth_p1 = current_marginal_rate <= target_rate
-                else:
-                    use_roth_p1 = False
-                
-                # Allocate to appropriate account
-                if use_roth_p1:
-                    b_roth_p1 += (employee_contrib_p1 + match_p1)
-                    contrib_strategy_used = 'Roth'
-                else:
-                    b_pretax_p1 += (employee_contrib_p1 + match_p1)
-                    contrib_strategy_used = 'Traditional'
-                
-                remaining_surplus -= employee_contrib_p1
-            
-            # --- Person 2: 401k contributions (if employed) ---
-            if p2_age < config['p2_employment_until_age'] and emp_p2 > 0 and remaining_surplus > 0:
-                max_contrib_p2 = 30500 if p2_age >= 50 else 23000
-                
-                employee_contrib_p2 = min(
-                    emp_p2 * p2_contrib_rate,
-                    max_contrib_p2,
-                    remaining_surplus
-                )
-                contrib_p2_401k = employee_contrib_p2
-                
-                match_p2 = min(emp_p2 * p2_match_rate, max_contrib_p2)
-                
-                # Decide Roth vs Traditional for P2
-                if p2_force_roth:
-                    use_roth_p2 = True
-                elif auto_optimize:
-                    use_roth_p2 = current_marginal_rate <= target_rate
-                else:
-                    use_roth_p2 = False
-                
-                if use_roth_p2:
-                    b_roth_p2 += (employee_contrib_p2 + match_p2)
-                else:
-                    b_pretax_p2 += (employee_contrib_p2 + match_p2)
-                
-                remaining_surplus -= employee_contrib_p2
-            
-            # --- Remainder to taxable account (after tax) ---
-            if remaining_surplus > 0:
-                # Apply marginal tax rate to remaining surplus
-                after_tax_surplus = remaining_surplus * (1 - current_marginal_rate)
-                b_taxable += after_tax_surplus
-        
         # --- 6. Taxes ---
         final_ord_income = (emp_p1 + emp_p2 + ss_total + pens_total + 
-                           rmd_total + wd_pretax_p1 + wd_pretax_p2 + roth_conversion + 
-                           current_rental_income + business_income_this_year + passive_income_this_year)
+                           rmd_total + wd_pretax_p1 + wd_pretax_p2 + roth_conversion + current_rental_income)
                            
         basis_ratio = config['taxable_basis_ratio']
         capital_gains = wd_taxable * (1 - basis_ratio)
@@ -511,8 +299,7 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
         
         # --- 7. Record ---
         liquid_net_worth = b_taxable + b_pretax_p1 + b_pretax_p2 + b_roth_p1 + b_roth_p2
-        # Subtract remaining debt from net worth
-        net_worth = liquid_net_worth + primary_home_value + current_rental_value_total - remaining_debt
+        net_worth = liquid_net_worth + primary_home_value + current_rental_value_total
         
         records.append({
             'Year': year,
@@ -520,8 +307,6 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
             'P2_Age': p2_age,
             'Employment_P1': round(emp_p1),
             'Employment_P2': round(emp_p2),
-            'Business_Income': round(business_income_this_year),
-            'Passive_Income': round(passive_income_this_year),
             'SS_P1': round(ss_p1),
             'SS_P2': round(ss_p2),
             'Pension_P1': round(pens_p1),
@@ -531,14 +316,6 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
             'Rental_Income': round(current_rental_income),
             'Total_Income': round(total_income),
             'Spend_Goal': round(spend_goal),
-            'Medical_Expenses': round(medical_expenses_this_year),
-            'Child_Expenses': round(child_expenses_this_year),
-            'College_Expenses': round(college_expenses_this_year),
-            'Debt_Payment': round(total_debt_payment),
-            'Remaining_Debt': round(remaining_debt),
-            'Rent_Payment': round(rent_this_year),
-            'Insurance_Premium': round(insurance_premium_this_year),
-            'Mortgage_Payment': round(total_mortgage_payment),
             'Previous_Taxes': round(previous_year_taxes),
             'Cash_Need': round(cash_need),
             'WD_PreTax_P1': round(wd_pretax_p1),
@@ -549,11 +326,6 @@ def run_deterministic(config: SimulationConfig, strategy_name: str = 'standard',
             'Roth_Conversion': round(roth_conversion),
             'Conv_P1': round(conv_p1),
             'Conv_P2': round(conv_p2),
-            'Contrib_P1_401k': round(contrib_p1_401k),
-            'Contrib_P2_401k': round(contrib_p2_401k),
-            'Match_P1': round(match_p1),
-            'Match_P2': round(match_p2),
-            'Contrib_Strategy': contrib_strategy_used,
             'Ord_Income': round(final_ord_income),
             'Cap_Gains': round(capital_gains),
             'Tax_Bill': round(tax_bill),
