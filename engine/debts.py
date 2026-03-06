@@ -123,17 +123,21 @@ def initialize_debts(config):
     
     # Car Loan
     if config.get('car_loan_balance', 0) > 0:
-        # Calculate monthly payment if not provided, using years remaining
         car_payment = config.get('car_loan_payment', 0)
+        car_rate = config.get('car_loan_rate', 0.06)
         if car_payment == 0 and config.get('car_loan_years', 0) > 0:
-            # Simple approximation: balance / (years * 12)
-            # More accurate would use amortization formula, but we'll use provided payment
-            car_payment = config['car_loan_balance'] / (config['car_loan_years'] * 12)
-        
+            # Proper amortization formula
+            r = car_rate / 12
+            n = int(config['car_loan_years'] * 12)
+            if r > 0 and n > 0:
+                car_payment = config['car_loan_balance'] * r / (1 - (1 + r) ** (-n))
+            else:
+                car_payment = config['car_loan_balance'] / max(n, 1)
+
         car_debt = Debt(
             balance=config['car_loan_balance'],
             monthly_payment=car_payment,
-            annual_rate=0.06,  # Assume 6% if not provided
+            annual_rate=car_rate,
             label='Car Loan'
         )
         debts.append(car_debt)

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
 class SimulationParams(BaseModel):
@@ -8,18 +8,24 @@ class SimulationParams(BaseModel):
     p2_start_age: int = Field(ge=0, le=100)
     end_simulation_age: int = Field(ge=0, le=120)
     inflation_rate: float = Field(ge=0, le=0.5)
-    
+
+    # Location (for state tax)
+    state_of_residence: Optional[str] = Field(default='Texas')
+
     # Spending & Tax
     annual_spend_goal: float = Field(ge=0)
+    retirement_spending_ratio: Optional[float] = Field(ge=0, le=2, default=0.80)
     filing_status: Optional[str] = 'MFJ'
     target_tax_bracket_rate: float = Field(ge=0, le=1, default=0.24)
     previous_year_taxes: Optional[float] = Field(ge=0, default=0)
-    
+
     # Employment
     p1_employment_income: float = Field(ge=0, default=0)
     p1_employment_until_age: int = Field(ge=0, le=100, default=65)
+    p1_salary_growth_rate: Optional[float] = Field(ge=0, le=0.3, default=0.025)
     p2_employment_income: float = Field(ge=0, default=0)
     p2_employment_until_age: int = Field(ge=0, le=100, default=65)
+    p2_salary_growth_rate: Optional[float] = Field(ge=0, le=0.3, default=0.025)
     
     # Social Security
     p1_ss_amount: float = Field(ge=0, default=0)
@@ -30,8 +36,10 @@ class SimulationParams(BaseModel):
     # Pensions
     p1_pension: float = Field(ge=0, default=0)
     p1_pension_start_age: int = Field(ge=0, le=100, default=65)
+    p1_pension_cola: Optional[bool] = Field(default=True)
     p2_pension: float = Field(ge=0, default=0)
     p2_pension_start_age: int = Field(ge=0, le=100, default=65)
+    p2_pension_cola: Optional[bool] = Field(default=True)
     
     # Account Balances
     bal_taxable: float = Field(ge=0)
@@ -40,12 +48,14 @@ class SimulationParams(BaseModel):
     bal_roth_p1: float = Field(ge=0)
     bal_roth_p2: float = Field(ge=0)
     
-    # Growth Rates
+    # Growth Rates (pre-retirement)
     growth_rate_taxable: float = Field(ge=-0.5, le=0.5)
     growth_rate_pretax_p1: float = Field(ge=-0.5, le=0.5)
     growth_rate_pretax_p2: float = Field(ge=-0.5, le=0.5)
     growth_rate_roth_p1: float = Field(ge=-0.5, le=0.5)
     growth_rate_roth_p2: float = Field(ge=-0.5, le=0.5)
+    # Post-retirement growth rate (applied after p1 retires)
+    post_retirement_growth_rate: Optional[float] = Field(ge=-0.5, le=0.5, default=0.05)
     taxable_basis_ratio: float = Field(ge=0, le=1)
     
     # 401k Contribution Settings (NEW - for accumulation phase)
@@ -68,6 +78,7 @@ class SimulationParams(BaseModel):
     car_loan_balance: Optional[float] = Field(ge=0, default=0)
     car_loan_payment: Optional[float] = Field(ge=0, default=0)
     car_loan_years: Optional[float] = Field(ge=0, le=10, default=0)
+    car_loan_rate: Optional[float] = Field(ge=0, le=0.3, default=0.06)
     
     credit_card_debt: Optional[float] = Field(ge=0, default=0)
     credit_card_payment: Optional[float] = Field(ge=0, default=0)
@@ -129,6 +140,10 @@ class SimulationParams(BaseModel):
     rental_2_mortgage_principal: Optional[float] = Field(ge=0, default=0)
     rental_2_mortgage_rate: Optional[float] = Field(ge=0, le=0.5, default=0)
     rental_2_mortgage_years: Optional[float] = Field(ge=0, le=50, default=0)
+
+    # One-time expenses
+    one_time_expenses: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    # Each entry: {"year": 2028, "amount": 50000, "description": "Kitchen remodel"}
 
 
 class MonteCarloParams(SimulationParams):
