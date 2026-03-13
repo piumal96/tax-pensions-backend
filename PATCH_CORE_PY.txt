@@ -1,0 +1,143 @@
+# IMPLEMENTATION PATCH FOR engine/core.py
+# ==========================================
+#
+# This file shows exactly what to add to engine/core.py to fix the income accumulation issue.
+# Insert this code after line 288 (after withdrawal logic, before tax calculation).
+
+"""
+LOCATION: engine/core.py, after line 288
+
+Add this import at the top of the file:
+"""
+from engine.contributions import allocate_surplus_simple
+
+"""
+Then insert this code block after line 288 (after the withdrawal strategy execution,
+before the tax calculation that starts around line 291):
+"""
+
+# --- 6a. HANDLE INCOME SURPLUS (Accumulation Phase Fix) ---
+# This fixes the critical bug where surplus income was never added to accounts
+
+# Calculate total cash income available
+total_cash_income = emp_p1 + emp_p2 + ss_total + pens_total + current_rental_income
+
+# Calculate total cash needed (before withdrawals)
+total_cash_needed = spend_goal + total_mortgage_payment + previous_year_taxes
+
+# Calculate surplus (positive) or shortfall (negative)
+cash_surplus = total_cash_income - total_cash_needed
+
+# If we have surplus income, allocate it optimally to accounts
+if cash_surplus > 0:
+    # Use the optimal allocation strategy
+    allocation = allocate_surplus_simple(
+        surplus=cash_surplus,
+        config=config,
+        ages=(p1_age, p2_age),
+        incomes=(emp_p1, emp_p2),
+        inflation_factor=inflation_idx,
+        tax_brackets=tax_calc.brackets_ordinary,
+        std_deduction=tax_calc.std_deduction,
+        target_tax_rate=config.get('target_tax_bracket_rate', 0.24)
+    )
+    
+    # Apply the allocations to account balances
+    b_pretax_p1 += allocation['to_pretax_p1']
+    b_pretax_p2 += allocation['to_pretax_p2']
+    b_roth_p1 += allocation['to_roth_p1']
+    b_roth_p2 += allocation['to_roth_p2']
+    b_taxable += allocation['to_taxable']
+    
+    # Optional: Track allocation strategy for reporting
+    allocation_strategy = allocation['strategy_used']
+    
+    # Note: The tax calculation below will account for the Traditional 401k contributions
+    # automatically since they reduce ordinary income
+
+# --- 6b. Original Tax Calculation (continue as before) ---
+# The code below (around line 291) continues unchanged
+
+"""
+ALTERNATIVE: Even Simpler Version (No new module needed)
+==========================================================
+
+If you want to avoid creating a new module, you can use this standalone version:
+"""
+
+# --- 6a. HANDLE INCOME SURPLUS (Simple Standalone Version) ---
+total_cash_income = emp_p1 + emp_p2 + ss_total + pens_total + current_rental_income
+total_cash_needed = spend_goal + total_mortgage_payment + previous_year_taxes
+cash_surplus = total_cash_income - total_cash_needed
+
+if cash_surplus > 0:
+    # Simple allocation: 15% contribution + 5% match, smart Roth/Traditional choice
+    
+    # Estimate current marginal tax rate
+    adj_std_ded = tax_calc.std_deduction * inflation_idx
+    taxable_income = max(0, total_cash_income - adj_std_ded)
+    adj_brackets = [(lim * inflation_idx, rate) for lim, rate in tax_calc.brackets_ordinary]
+    
+    current_marginal_rate = 0.24
+    for limit, rate in adj_brackets:
+        if taxable_income <= limit:
+            current_marginal_rate = rate
+            break
+    
+    # Decide Roth vs Traditional (tax arbitrage)
+    target_rate = config.get('target_tax_bracket_rate', 0.24)
+    use_roth = current_marginal_rate <= target_rate
+    
+    # Person 1: 401k contributions (if employed)
+    if p1_age < config['p1_employment_until_age'] and emp_p1 > 0:
+        contrib_rate = config.get('p1_401k_contribution_rate', 0.15)
+        match_rate = config.get('p1_401k_employer_match_rate', 0.05)
+        
+        max_contrib_p1 = 23000 if p1_age < 50 else 30500  # IRS limits
+        employee_contrib_p1 = min(emp_p1 * contrib_rate, max_contrib_p1, cash_surplus * 0.5)
+        employer_match_p1 = emp_p1 * match_rate
+        
+        if use_roth:
+            b_roth_p1 += (employee_contrib_p1 + employer_match_p1)
+        else:
+            b_pretax_p1 += (employee_contrib_p1 + employer_match_p1)
+        
+        cash_surplus -= employee_contrib_p1
+    
+    # Person 2: 401k contributions (if employed)
+    if p2_age < config['p2_employment_until_age'] and emp_p2 > 0:
+        contrib_rate = config.get('p2_401k_contribution_rate', 0.15)
+        match_rate = config.get('p2_401k_employer_match_rate', 0.05)
+        
+        max_contrib_p2 = 23000 if p2_age < 50 else 30500
+        employee_contrib_p2 = min(emp_p2 * contrib_rate, max_contrib_p2, cash_surplus)
+        employer_match_p2 = emp_p2 * match_rate
+        
+        if use_roth:
+            b_roth_p2 += (employee_contrib_p2 + employer_match_p2)
+        else:
+            b_pretax_p2 += (employee_contrib_p2 + employer_match_p2)
+        
+        cash_surplus -= employee_contrib_p2
+    
+    # Remaining surplus to taxable (after tax)
+    if cash_surplus > 0:
+        after_tax_surplus = cash_surplus * (1 - current_marginal_rate)
+        b_taxable += after_tax_surplus
+
+# --- 6b. Original Tax Calculation (continue as before) ---
+
+"""
+TESTING THE FIX
+===============
+
+After applying this patch, run:
+    python test_scenario_analysis.py
+
+Expected results:
+- The warning "⚠️ ISSUE: We have surplus..." should DISAPPEAR
+- Taxable balance should grow by ~$110k/year
+- 401k balances should grow by ~$40k/year (contributions + match)
+- Total savings should be ~$1.4M after 10 years (not $19k)
+
+"""
